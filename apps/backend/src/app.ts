@@ -11,3 +11,7 @@ app.use(express.json());
 
 app.use("/candidates", candidateRoutes);
 app.use("/upload", uploadRoutes);
+
+app.get("/", (req, res) => {
+  res.json({ message: "VisualEXL Backend is alive 🚀" });
+});
