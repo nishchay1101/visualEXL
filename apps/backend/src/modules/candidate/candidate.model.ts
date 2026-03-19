@@ -17,6 +17,7 @@ const CandidateSchema = new mongoose.Schema({
   score: { type: Number, index: true },
   status: { type: String, default: "applied", index: true },
   company: { type: String, index: true },
+  sessionId: { type: String, index: true },
   rawData: Object
 }, { timestamps: true });
 

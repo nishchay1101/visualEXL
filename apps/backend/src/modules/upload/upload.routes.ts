@@ -10,6 +10,12 @@ router.post("/", upload.single("file"), async (req: any, res) => {
   if (!req.file) {
     return res.status(400).json({ message: "No file uploaded" });
   }
+
+  const sessionId = req.headers["x-session-id"];
+  if (!sessionId) {
+    return res.status(401).json({ message: "No session ID provided. Please refresh the page." });
+  }
+
   const workbook = xlsx.readFile(req.file.path);
   const sheetName = workbook.SheetNames.find(n => n.toLowerCase().includes('application')) || workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
@@ -26,15 +32,12 @@ router.post("/", upload.single("file"), async (req: any, res) => {
     }
   }
 
-  // Build actual header labels from the header row (use original casing for display)
   const originalHeaders: string[] = (rawGrid[headerIndex] || []).map(h => String(h || "").trim());
   const lowerHeaders: string[] = originalHeaders.map(h => h.toLowerCase());
 
   const rows = rawGrid.slice(headerIndex + 1).filter(r => r && r.some(v => v !== null && v !== undefined && v !== ""));
 
   const formatted = rows.map((row: any[]) => {
-    // Helper: find first column matching any keyword, returns the raw value
-    // Exact match first, then partial
     const getExact = (exact: string) => {
       const idx = lowerHeaders.indexOf(exact.toLowerCase());
       return idx !== -1 ? row[idx] : undefined;
@@ -54,10 +57,8 @@ router.post("/", upload.single("file"), async (req: any, res) => {
     const fsdScore = getExact("fsd  scores") ?? getExact("fsd scores") ?? getExact("fsd score") ?? getVal(["fsd scores", "fsd score", "fsd"]);
     const feScore = getExact("fe scores") ?? getExact("fe score") ?? getVal(["fe scores", "fe score"]);
     const dbmsScore = getExact("dbms scores") ?? getExact("dbms score") ?? getVal(["dbms scores", "dbms score"]);
-    // Find resume link by scanning values for http URLs
     const resumeLink = row.find((v: any) => typeof v === "string" && v.startsWith("http")) || "";
 
-    // Build a clean keyed rawData object using original header names
     const rawData: Record<string, any> = {};
     originalHeaders.forEach((header, idx) => {
       if (header && row[idx] !== undefined && row[idx] !== null && row[idx] !== "") {
@@ -70,11 +71,6 @@ router.post("/", upload.single("file"), async (req: any, res) => {
     return {
       name,
       email,
-      college: getVal(["college", "university", "institution"]) || "",
-      company: getVal(["company", "employer"]) || "",
-      score: Number(scoreVal) || 0,
-      skills: cohort ? [cohort] : [],
-      // Store rich structured data for card details
       phone,
       cohort,
       resumeStatus,
@@ -84,34 +80,32 @@ router.post("/", upload.single("file"), async (req: any, res) => {
       feScore: Number(feScore) || 0,
       dbmsScore: Number(dbmsScore) || 0,
       resumeLink: typeof resumeLink === "string" && resumeLink.startsWith("http") ? resumeLink : "",
+      college: getVal(["college", "university", "institution"]) || "",
+      company: getVal(["company", "employer"]) || "",
+      score: Number(scoreVal) || 0,
+      skills: cohort ? [cohort] : [],
+      sessionId,
       rawData
     };
   });
 
-  // Filter out completely empty/invalid rows
   const validCandidates = formatted.filter(c => c.name !== "Unknown" || c.email);
 
-  // Upsert: update existing record if email+phone matches, otherwise insert new
-  // This ensures re-uploading the same Excel never creates duplicate records
   const ops = validCandidates.map(candidate => ({
     updateOne: {
-      filter: { email: candidate.email, phone: candidate.phone },
+      filter: { email: candidate.email, phone: candidate.phone, sessionId },
       update: { $set: candidate },
       upsert: true,
     }
   }));
 
   const result = await Candidate.bulkWrite(ops, { ordered: false });
-  const inserted = result.upsertedCount;
-  const updated = result.modifiedCount;
-
   res.json({
     message: "Upload complete",
-    inserted,
-    updated,
+    inserted: result.upsertedCount,
+    updated: result.modifiedCount,
     total: validCandidates.length
   });
-
 });
 
 export default router;
