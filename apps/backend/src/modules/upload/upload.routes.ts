@@ -120,4 +120,12 @@ router.post("/close", async (req: any, res) => {
   res.json({ message: "Close received" });
 })
 
+router.get("/reset", async (req: any, res) => {
+  if (!process.env.RESET_KEY || req.query.key !== process.env.RESET_KEY) {
+    return res.status(401).json({ message: "Forbidden!" });
+  }
+  await Candidate.collection.drop()
+  res.json({ message: "Reset Done" });
+})
+
 export default router;

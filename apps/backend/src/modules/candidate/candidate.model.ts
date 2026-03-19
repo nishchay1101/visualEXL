@@ -24,6 +24,6 @@ const CandidateSchema = new mongoose.Schema({
 
 CandidateSchema.index({ name: "text", college: "text" });
 // Compound unique index — prevents duplicate records on re-upload
-CandidateSchema.index({ email: 1, phone: 1 }, { unique: true, sparse: true });
+CandidateSchema.index({ email: 1, phone: 1, sessionId: 1 }, { unique: true, sparse: true });
 
 export default mongoose.model("Candidate", CandidateSchema);
