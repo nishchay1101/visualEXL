@@ -1,0 +1,40 @@
+# Dependencies
+**/node_modules/
+.npm
+.pnpm-store
+
+# Build outputs
+**/dist/
+**/build/
+*.tsbuildinfo
+**/uploads/
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+
+# Logs and debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs/
+*.log
+
+# Project-specific
+uploads/
+sample_exl/
+
+# OS/System files
+.DS_Store
+Thumbs.db
+.ipynb_checkpoints/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker
+.docker/
