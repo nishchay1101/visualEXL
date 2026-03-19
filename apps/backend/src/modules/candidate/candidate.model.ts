@@ -18,7 +18,8 @@ const CandidateSchema = new mongoose.Schema({
   status: { type: String, default: "applied", index: true },
   company: { type: String, index: true },
   sessionId: { type: String, index: true },
-  rawData: Object
+  rawData: Object,
+  ttl: { type: Date, expires: 5 * 60 }
 }, { timestamps: true });
 
 CandidateSchema.index({ name: "text", college: "text" });

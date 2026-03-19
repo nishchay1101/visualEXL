@@ -23,6 +23,26 @@ export default function CardList({ refreshKey }: { refreshKey: number }) {
       .catch(err => console.error("Error fetching candidates:", err));
   }, [search, refreshKey]);
 
+  useEffect(() => {
+    const heartbeatTimer = setInterval(() => {
+      api.post("/upload/heartbeat")
+        .catch(err => console.error("Heartbeat failed", err));
+    }, 120000);
+
+    const handleClose = () => {
+      api.post("/upload/close")
+        .catch(err => console.error("Close failed", err));
+    };
+
+    window.addEventListener("beforeunload", handleClose);
+
+    return () => {
+      clearInterval(heartbeatTimer);
+      window.removeEventListener("beforeunload", handleClose);
+    };
+  }, []);
+
+
   // Unique options for filter dropdowns
   const uniqueVals = useMemo(() => ({
     cohort: [...new Set(data.map(c => c.cohort).filter(Boolean))].sort(),

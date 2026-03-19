@@ -100,6 +100,7 @@ router.post("/", upload.single("file"), async (req: any, res) => {
   }));
 
   const result = await Candidate.bulkWrite(ops, { ordered: false });
+  await Candidate.updateMany({ sessionId }, { $set: { ttl: new Date() } })
   res.json({
     message: "Upload complete",
     inserted: result.upsertedCount,
@@ -107,5 +108,16 @@ router.post("/", upload.single("file"), async (req: any, res) => {
     total: validCandidates.length
   });
 });
+router.post("/heartbeat", async (req: any, res) => {
+  const sessionId = req.headers["x-session-id"];
+  await Candidate.updateMany({ sessionId }, { $set: { ttl: new Date() } })
+  res.json({ message: "Heartbeat received" });
+})
+
+router.post("/close", async (req: any, res) => {
+  const sessionId = req.headers["x-session-id"];
+  await Candidate.deleteMany({ sessionId })
+  res.json({ message: "Close received" });
+})
 
 export default router;
