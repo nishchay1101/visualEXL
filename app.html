@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>visualEXL — Recruitment Dashboard</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Inter', system-ui, sans-serif; background: #f1f5f9; }
+    ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: #f1f5f9; }
+    ::-webkit-scrollbar-thumb { background: #c7d2fe; border-radius: 3px; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useMemo, useCallback } = React;
+const BACKEND = "http://localhost:5001/api";
+
+// ── Helpers ──────────────────────────────────────────────────────────────
+
+function detectScoreColumns(data) {
+  if (!data.length) return [];
+  const allKeys = new Set();
+  data.forEach(c => Object.keys(c.rawData || {}).forEach(k => allKeys.add(k)));
+  return [...allKeys].filter(key => {
+    const vals = data.map(c => c.rawData?.[key]).filter(v => v !== undefined && v !== null && v !== "");
+    if (!vals.length) return false;
+    const numCount = vals.filter(v => !isNaN(Number(v)) && v !== "").length;
+    return numCount / vals.length >= 0.6;
+  });
+}
+
+function getScoreColor(val, max) {
+  const pct = max > 0 ? (val / max) * 100 : 0;
+  if (pct >= 80) return { chip: "#dcfce7", text: "#15803d", bar: "#22c55e" };
+  if (pct >= 60) return { chip: "#fef9c3", text: "#b45309", bar: "#eab308" };
+  return { chip: "#fee2e2", text: "#b91c1c", bar: "#ef4444" };
+}
+
+function getBadgeColor(prStatus) {
+  const lower = (prStatus || "").toLowerCase();
+  if (lower.includes("ready") && !lower.includes("not")) return { bg: "#dcfce7", text: "#16a34a" };
+  if (lower.includes("not")) return { bg: "#fee2e2", text: "#dc2626" };
+  return { bg: "#fef9c3", text: "#ca8a04" };
+}
+
+// ── Upload Component ──────────────────────────────────────────────────────
+
+function Upload({ onSuccess }) {
+  const [status, setStatus] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const sessionId = useMemo(() => {
+    let id = sessionStorage.getItem("vexl-session");
+    if (!id) { id = Math.random().toString(36).slice(2); sessionStorage.setItem("vexl-session", id); }
+    return id;
+  }, []);
+
+  const handleFile = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setLoading(true);
+    setStatus("Uploading…");
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      const res = await fetch(`${BACKEND}/upload`, {
+        method: "POST", body: fd,
+        headers: { "x-session-id": sessionId },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Upload failed");
+      setStatus(`✅ ${data.total} candidates loaded (${data.numericColumns?.length ?? 0} score columns detected)`);
+      onSuccess();
+    } catch (err) {
+      setStatus(`❌ ${err.message}`);
+    } finally {
+      setLoading(false);
+      e.target.value = "";
+    }
+  };
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: "16px", flexWrap: "wrap" }}>
+      <label style={{
+        display: "inline-flex", alignItems: "center", gap: "8px",
+        padding: "10px 20px", borderRadius: "30px",
+        background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
+        color: "#fff", fontSize: "14px", fontWeight: 600,
+        cursor: loading ? "not-allowed" : "pointer",
+        opacity: loading ? 0.7 : 1, boxShadow: "0 2px 8px rgba(79,70,229,0.3)",
+      }}>
+        📂 {loading ? "Uploading…" : "Upload Excel File"}
+        <input type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={handleFile} disabled={loading} />
+      </label>
+      {status && (
+        <span style={{ fontSize: "13px", color: status.startsWith("✅") ? "#16a34a" : status.startsWith("❌") ? "#dc2626" : "#64748b", fontWeight: 500 }}>
+          {status}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ── Card Component ────────────────────────────────────────────────────────
+
+function CandidateCard({ c, scoreColumns, isHovered, onMouseEnter, onMouseLeave }) {
+  const prBadge = getBadgeColor(c.prStatus);
+  const raw = c.rawData || {};
+
+  const scoreEntries = scoreColumns
+    .map(col => ({ col, val: raw[col] }))
+    .filter(({ val }) => val !== undefined && val !== null && val !== "");
+
+  const nonScoreEntries = Object.entries(raw).filter(
+    ([k, v]) => !scoreColumns.includes(k) && v !== "" && v !== null && v !== undefined
+  );
+
+  const maxScore = Math.max(...scoreEntries.map(({ val }) => Number(val) || 0), 100);
+
+  return (
+    <div
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      style={{
+        backgroundColor: "#fff",
+        borderRadius: "16px",
+        padding: "20px",
+        display: "flex",
+        flexDirection: "column",
+        gap: "14px",
+        cursor: "default",
+        transition: "box-shadow 0.3s ease, border-color 0.3s ease, transform 0.3s cubic-bezier(0.4,0,0.2,1)",
+        transform: isHovered ? "translateY(-6px)" : "translateY(0)",
+        boxShadow: isHovered ? "0 20px 40px rgba(79,70,229,0.18)" : "0 4px 16px rgba(0,0,0,0.06)",
+        border: isHovered ? "1.5px solid #c7d2fe" : "1.5px solid #f1f5f9",
+      }}
+    >
+      {/* Header */}
+      <div style={{ display: "flex", gap: "12px", alignItems: "flex-start" }}>
+        <div style={{
+          width: "44px", height: "44px", borderRadius: "50%", flexShrink: 0,
+          background: isHovered ? "linear-gradient(135deg,#4f46e5,#7c3aed)" : "linear-gradient(135deg,#6366f1,#4f46e5)",
+          color: "#fff", display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: "20px", fontWeight: 700, transition: "background 0.3s ease",
+        }}>
+          {(c.name || "?")[0].toUpperCase()}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <h3 style={{ margin: "0 0 4px", fontSize: "17px", color: "#0f172a", fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {c.name}
+          </h3>
+          <p style={{ margin: 0, fontSize: "13px", color: "#64748b", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {c.email || "—"}
+          </p>
+        </div>
+        <span style={{
+          flexShrink: 0, padding: "4px 10px", borderRadius: "12px",
+          fontSize: "12px", fontWeight: 600, whiteSpace: "nowrap",
+          backgroundColor: prBadge.bg, color: prBadge.text,
+        }}>
+          {c.prStatus || "Unknown"}
+        </span>
+      </div>
+
+      {/* Summary */}
+      <div style={{ display: "flex", gap: "12px", backgroundColor: "#f8fafc", borderRadius: "10px", padding: "10px 14px" }}>
+        {[["Phone", c.phone], ["Cohort", c.cohort], ["Resume", c.resumeStatus]].map(([label, val]) => (
+          <div key={label} style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}>
+            <span style={{ fontSize: "11px", color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "2px" }}>{label}</span>
+            <span style={{ fontSize: "13px", fontWeight: 600, color: label === "Resume" && val === "Approved" ? "#16a34a" : "#334155", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {val || "—"}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {/* Score chips */}
+      {scoreEntries.length > 0 && (
+        <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+          {scoreEntries.map(({ col, val }) => {
+            const num = Number(val) || 0;
+            const colors = getScoreColor(num, maxScore);
+            return (
+              <div key={col} style={{
+                flex: "1 1 auto", minWidth: "60px",
+                display: "flex", flexDirection: "column", alignItems: "center",
+                borderRadius: "10px", padding: "8px 6px",
+                backgroundColor: colors.chip,
+              }}>
+                <span style={{ fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.5px", fontWeight: 600, color: colors.text }}>{col}</span>
+                <span style={{ fontSize: "16px", fontWeight: 700, marginTop: "2px", color: colors.text }}>
+                  {Number.isInteger(num) ? num : num.toFixed(1)}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Expand on hover */}
+      <div style={{
+        maxHeight: isHovered ? "900px" : "0px",
+        opacity: isHovered ? 1 : 0,
+        overflow: "hidden",
+        transition: "max-height 0.45s cubic-bezier(0.4,0,0.2,1), opacity 0.3s ease",
+        display: "flex", flexDirection: "column", gap: "12px",
+      }}>
+        <hr style={{ border: "none", borderTop: "1px dashed #e2e8f0" }} />
+
+        {/* Score bars */}
+        {scoreEntries.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <span style={{ fontSize: "11px", color: "#334155", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px" }}>Score Breakdown</span>
+            {scoreEntries.map(({ col, val }) => {
+              const num = Number(val) || 0;
+              const pct = Math.min(maxScore > 0 ? (num / maxScore) * 100 : 0, 100);
+              const colors = getScoreColor(num, maxScore);
+              return (
+                <div key={col}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
+                    <span style={{ fontSize: "12px", color: "#64748b", fontWeight: 600 }}>{col}</span>
+                    <span style={{ fontSize: "12px", fontWeight: 700, color: colors.text }}>{Number.isInteger(num) ? num : num.toFixed(1)}</span>
+                  </div>
+                  <div style={{ height: "6px", backgroundColor: "#f1f5f9", borderRadius: "3px", overflow: "hidden" }}>
+                    <div style={{
+                      height: "100%", borderRadius: "3px",
+                      width: isHovered ? `${pct}%` : "0%",
+                      backgroundColor: colors.bar,
+                      transition: "width 0.6s cubic-bezier(0.4,0,0.2,1) 0.15s",
+                    }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {c.resumeLink && (
+          <a href={c.resumeLink} target="_blank" rel="noreferrer"
+            style={{ display: "inline-block", padding: "8px 16px", backgroundColor: "#4f46e5", color: "#fff", borderRadius: "8px", textDecoration: "none", fontSize: "13px", fontWeight: 600, alignSelf: "flex-start" }}>
+            📄 View Resume ↗
+          </a>
+        )}
+
+        {nonScoreEntries.length > 0 && (
+          <>
+            <span style={{ fontSize: "11px", color: "#334155", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px" }}>All Excel Fields</span>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
+              {nonScoreEntries.map(([key, value]) => {
+                const isLink = typeof value === "string" && value.startsWith("http");
+                return (
+                  <div key={key} style={{ display: "flex", flexDirection: "column", gap: "2px", padding: "8px 10px", borderRadius: "8px", backgroundColor: "#f8fafc" }}>
+                    <span style={{ fontSize: "11px", color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.4px" }}>{key}</span>
+                    {isLink
+                      ? <a href={value} target="_blank" rel="noreferrer" style={{ color: "#4f46e5", textDecoration: "none", fontWeight: 600, fontSize: "13px" }}>View ↗</a>
+                      : <span style={{ fontSize: "13px", color: "#0f172a", fontWeight: 500, wordBreak: "break-word" }}>
+                          {typeof value === "number" ? Number(value).toFixed(2).replace(/\.00$/, "") : String(value)}
+                        </span>
+                    }
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Hint */}
+      <div style={{ textAlign: "center", fontSize: "11px", color: "#94a3b8", fontStyle: "italic", opacity: isHovered ? 0 : 1, transition: "opacity 0.2s ease", paddingTop: "2px" }}>
+        Hover to expand details
+      </div>
+    </div>
+  );
+}
+
+// ── CardList Component ────────────────────────────────────────────────────
+
+function CardList({ refreshKey }) {
+  const [data, setData] = useState([]);
+  const [search, setSearch] = useState("");
+  const [hoveredCard, setHoveredCard] = useState(null);
+  const [sortKey, setSortKey] = useState("name");
+  const [sortDir, setSortDir] = useState("asc");
+  const [groupBy, setGroupBy] = useState("none");
+  const [filters, setFilters] = useState({ cohort: "", prStatus: "", resumeStatus: "" });
+
+  const sessionId = useMemo(() => sessionStorage.getItem("vexl-session") || "", []);
+
+  useEffect(() => {
+    fetch(`${BACKEND}/candidates?search=${encodeURIComponent(search)}`, {
+      headers: { "x-session-id": sessionId },
+    })
+      .then(r => r.json())
+      .then(setData)
+      .catch(console.error);
+  }, [search, refreshKey]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      fetch(`${BACKEND}/upload/heartbeat`, { method: "POST", headers: { "x-session-id": sessionId } }).catch(() => {});
+    }, 120000);
+    const onClose = () => navigator.sendBeacon(`${BACKEND}/upload/close`, JSON.stringify({ sessionId }));
+    window.addEventListener("beforeunload", onClose);
+    return () => { clearInterval(timer); window.removeEventListener("beforeunload", onClose); };
+  }, []);
+
+  const scoreColumns = useMemo(() => detectScoreColumns(data), [data]);
+
+  const uniqueVals = useMemo(() => ({
+    cohort: [...new Set(data.map(c => c.cohort).filter(Boolean))].sort(),
+    prStatus: [...new Set(data.map(c => c.prStatus).filter(Boolean))].sort(),
+    resumeStatus: [...new Set(data.map(c => c.resumeStatus).filter(Boolean))].sort(),
+  }), [data]);
+
+  const processed = useMemo(() => {
+    let result = [...data];
+    if (filters.cohort) result = result.filter(c => c.cohort === filters.cohort);
+    if (filters.prStatus) result = result.filter(c => c.prStatus === filters.prStatus);
+    if (filters.resumeStatus) result = result.filter(c => c.resumeStatus === filters.resumeStatus);
+    result.sort((a, b) => {
+      let av = sortKey === "name" ? (a.name || "").toLowerCase() : Number(a.rawData?.[sortKey] ?? 0);
+      let bv = sortKey === "name" ? (b.name || "").toLowerCase() : Number(b.rawData?.[sortKey] ?? 0);
+      if (av < bv) return sortDir === "asc" ? -1 : 1;
+      if (av > bv) return sortDir === "asc" ? 1 : -1;
+      return 0;
+    });
+    return result;
+  }, [data, filters, sortKey, sortDir]);
+
+  const grouped = useMemo(() => {
+    if (groupBy === "none") return { "All Candidates": processed };
+    const g = {};
+    for (const c of processed) {
+      const key = c[groupBy] || "Unknown";
+      if (!g[key]) g[key] = [];
+      g[key].push(c);
+    }
+    return g;
+  }, [processed, groupBy]);
+
+  const activeFiltersCount = Object.values(filters).filter(Boolean).length;
+  const clearFilters = () => setFilters({ cohort: "", prStatus: "", resumeStatus: "" });
+  const toggleSort = key => {
+    if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc");
+    else { setSortKey(key); setSortDir("asc"); }
+  };
+
+  const inputStyle = { padding: "8px 12px", borderRadius: "8px", border: "1.5px solid #e2e8f0", fontSize: "13px", backgroundColor: "#f8fafc", color: "#334155", cursor: "pointer", outline: "none" };
+
+  return (
+    <div style={{ padding: "20px", maxWidth: "1300px", margin: "0 auto" }}>
+      {/* Toolbar */}
+      <div style={{ display: "flex", flexDirection: "column", gap: "16px", backgroundColor: "#fff", borderRadius: "16px", padding: "20px", boxShadow: "0 2px 12px rgba(0,0,0,0.06)", marginBottom: "20px", border: "1px solid #f1f5f9" }}>
+        <input
+          style={{ width: "100%", padding: "12px 20px", fontSize: "15px", borderRadius: "30px", border: "2px solid #e2e8f0", outline: "none" }}
+          placeholder="🔍 Search by name or email…"
+          onChange={e => setSearch(e.target.value)}
+        />
+
+        {/* Sort */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+          <span style={{ fontSize: "12px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.5px" }}>Sort by</span>
+          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+            {["name", ...scoreColumns].map(key => (
+              <button key={key} onClick={() => toggleSort(key)}
+                style={{
+                  padding: "7px 14px", borderRadius: "20px", fontSize: "13px", fontWeight: 600, cursor: "pointer", transition: "all 0.15s",
+                  backgroundColor: sortKey === key ? "#4f46e5" : "#f8fafc",
+                  color: sortKey === key ? "#fff" : "#475569",
+                  border: sortKey === key ? "1.5px solid #4f46e5" : "1.5px solid #e2e8f0",
+                }}>
+                {key === "name" ? "Name" : key}
+                {sortKey === key && <span style={{ marginLeft: "4px" }}>{sortDir === "asc" ? "↑" : "↓"}</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Group + Filters */}
+        <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            <span style={{ fontSize: "11px", fontWeight: 700, color: "#64748b", textTransform: "uppercase" }}>Group by</span>
+            <select style={inputStyle} value={groupBy} onChange={e => setGroupBy(e.target.value)}>
+              <option value="none">No Grouping</option>
+              <option value="cohort">Cohort</option>
+              <option value="prStatus">Placement Status</option>
+              <option value="resumeStatus">Resume Status</option>
+            </select>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            <span style={{ fontSize: "11px", fontWeight: 700, color: "#64748b", textTransform: "uppercase" }}>
+              Filter {activeFiltersCount > 0 && <span style={{ backgroundColor: "#4f46e5", color: "#fff", padding: "2px 6px", borderRadius: "20px", fontSize: "10px" }}>{activeFiltersCount}</span>}
+            </span>
+            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
+              {[["cohort", "All Cohorts", uniqueVals.cohort], ["prStatus", "All PR Status", uniqueVals.prStatus], ["resumeStatus", "All Resume Status", uniqueVals.resumeStatus]].map(([field, placeholder, opts]) => (
+                <select key={field} style={inputStyle} value={filters[field]} onChange={e => setFilters(f => ({ ...f, [field]: e.target.value }))}>
+                  <option value="">{placeholder}</option>
+                  {opts.map(v => <option key={v} value={v}>{v}</option>)}
+                </select>
+              ))}
+              {activeFiltersCount > 0 && (
+                <button onClick={clearFilters} style={{ padding: "7px 14px", borderRadius: "8px", border: "1.5px solid #fca5a5", backgroundColor: "#fff1f2", color: "#dc2626", fontSize: "13px", fontWeight: 600, cursor: "pointer" }}>✕ Clear</button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <p style={{ fontSize: "13px", color: "#64748b", margin: "0 0 16px 4px" }}>
+        {processed.length} of {data.length} candidate{data.length !== 1 ? "s" : ""}{activeFiltersCount > 0 && " (filtered)"}
+      </p>
+
+      {processed.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "50px", backgroundColor: "#f8fafc", borderRadius: "16px", color: "#64748b", border: "2px dashed #cbd5e1" }}>
+          <div style={{ fontSize: "40px" }}>🔍</div>
+          <p>No candidates match your filters.</p>
+        </div>
+      ) : (
+        Object.entries(grouped).map(([groupName, candidates]) => (
+          <div key={groupName} style={{ marginBottom: "32px" }}>
+            {groupBy !== "none" && (
+              <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "14px" }}>
+                <span style={{ fontSize: "16px", fontWeight: 700, color: "#0f172a" }}>{groupName}</span>
+                <span style={{ backgroundColor: "#e0e7ff", color: "#4338ca", padding: "3px 10px", borderRadius: "20px", fontSize: "13px", fontWeight: 700 }}>{candidates.length}</span>
+              </div>
+            )}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: "20px", alignItems: "start" }}>
+              {candidates.map(c => (
+                <CandidateCard
+                  key={c._id}
+                  c={c}
+                  scoreColumns={scoreColumns}
+                  isHovered={hoveredCard === c._id}
+                  onMouseEnter={() => setHoveredCard(c._id)}
+                  onMouseLeave={() => setHoveredCard(null)}
+                />
+              ))}
+            </div>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+// ── App Root ──────────────────────────────────────────────────────────────
+
+function App() {
+  const [refreshKey, setRefreshKey] = useState(0);
+  return (
+    <div style={{ minHeight: "100vh", backgroundColor: "#f1f5f9" }}>
+      {/* Sticky gradient header */}
+      <header style={{
+        position: "sticky", top: 0, zIndex: 100,
+        background: "linear-gradient(135deg, #1e1b4b 0%, #312e81 50%, #4f46e5 100%)",
+        padding: "0 32px", display: "flex", alignItems: "center", height: "60px",
+        boxShadow: "0 4px 20px rgba(79,70,229,0.3)",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <span style={{ fontSize: "22px" }}>📊</span>
+          <span style={{ fontSize: "20px", fontWeight: 800, color: "#fff", letterSpacing: "-0.5px" }}>
+            visual<span style={{ color: "#a5b4fc" }}>EXL</span>
+          </span>
+        </div>
+        <span style={{ marginLeft: "16px", fontSize: "13px", color: "#c7d2fe", fontWeight: 500, borderLeft: "1px solid rgba(165,180,252,0.3)", paddingLeft: "16px" }}>
+          Recruitment Dashboard
+        </span>
+      </header>
+
+      {/* Upload strip */}
+      <div style={{ backgroundColor: "#fff", borderBottom: "1px solid #e2e8f0", padding: "20px 32px" }}>
+        <Upload onSuccess={() => setRefreshKey(k => k + 1)} />
+      </div>
+
+      {/* Cards */}
+      <main style={{ padding: "24px 12px" }}>
+        <CardList refreshKey={refreshKey} />
+      </main>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
